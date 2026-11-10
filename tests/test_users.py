@@ -11,7 +11,7 @@ def test_root(client):
     # To see the actual payload returned by the endpoint, 
     # use response.json() to get the JSON response
 
-    assert response.json() == {"message": "Hello World"}
+    assert response.json() == {"status": "ok", "docs": "/docs"}
 
 
 # Each test should be independent of each other

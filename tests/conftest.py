@@ -1,36 +1,22 @@
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.orm import sessionmaker, Session
-from dotenv import load_dotenv
-import os
 from typing import Generator
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.engine import make_url
 from app.config import settings
 from app.database import get_db, Base
 from app.main import app
-from typing import Generator
 from app.oauth2 import create_access_token
 from app import models
 
-load_dotenv(".env")
-
-database_password = os.getenv("DATABASE_PASSWORD")
-print("Password is not none", database_password is not None)
-
-SQLALCHEMY_DATABASE_URL = (
-    f"postgresql://{settings.DATABASE_USERNAME}:"
-    f"{settings.DATABASE_PASSWORD}@"
-    f"{settings.DATABASE_HOSTNAME}:"
-    f"{settings.DATABASE_PORT}/"
-    f"{settings.DATABASE_NAME}"
-                            )
-
+SQLALCHEMY_DATABASE_URL = settings.database_url
 
 # Safety check: drop_all() deletes everything, so refuse to run on a non-test database
-if not settings.DATABASE_NAME.endswith("_test"):
+test_db_name = make_url(SQLALCHEMY_DATABASE_URL).database or ""
+if not test_db_name.endswith("_test"):
     raise RuntimeError(
-        f"Refusing to run tests on '{settings.DATABASE_NAME}'. "
+        f"Refusing to run tests on '{test_db_name}'. "
         "The test database name must end with '_test'."
     )
 
@@ -102,8 +88,6 @@ def test_user2 (client):
     new_user["password"] = user_data["password"]
     return new_user
 
-database_password = os.getenv("DATABASE_PASSWORD")
-print("Password is not none", database_password is not None)
 
 
 # Fixture to create a token for the test user

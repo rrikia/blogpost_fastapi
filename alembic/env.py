@@ -6,7 +6,6 @@ from sqlalchemy import pool
 from alembic import context
 from app.models import Base
 from app.database import SQLALCHEMY_DATABASE_URL
-from app.config import settings
 
 
 # this is the Alembic Config object, which provides
@@ -25,7 +24,9 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # override the sqlalchemy.url in alembic.ini
-config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URL)
+# "%" must be doubled because alembic.ini values support %-interpolation
+# (URL-encoded passwords contain "%")
+config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URL.replace("%", "%%"))
 
 # other values from the config, defined by the needs of env.py
 # can be acquired:

@@ -68,3 +68,17 @@ class Vote(BaseModel):
     # validate that its value is only 0 or 1 
     # le=1 means <= 1
     dir: Annotated[int, Field(le=1, ge=0)]
+
+
+class CommentCreate(BaseModel):
+    content: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class CommentOut(BaseModel):
+    id: int
+    content: str
+    created_at: datetime
+    post_id: int
+    owner_id: int
+    owner: UserOut
+    model_config = ConfigDict(from_attributes=True)

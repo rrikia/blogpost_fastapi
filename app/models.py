@@ -63,3 +63,17 @@ class Vote(Base):
     #                 primary_key=True)
     # post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), 
     #                 primary_key=True)
+
+class Comment(Base):
+    __tablename__ = "comments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, nullable=False)
+    content: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"))
+    post_id: Mapped[int] = mapped_column(
+        ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    owner: Mapped["User"] = relationship()

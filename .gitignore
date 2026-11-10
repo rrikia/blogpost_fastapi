@@ -5,6 +5,7 @@ venv/
 *.py[cod]
 .git
 .pytest_cache
+backend-changes.patch
 
 # Distribution / packaging
 .Python

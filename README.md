@@ -91,6 +91,8 @@ To run the test suite using the dedicated Docker test service, if configured:
 ```bash
 docker compose -f compose.test.yaml run --build --rm tests
 ```
+### Badge
+   ![CI](https://github.com/rrikia/practice_fastapi/actions/workflows/ci.yml/badge.svg)
 
 ## API Documentation
 
@@ -98,6 +100,9 @@ Once the application is running, visit:
 
 - **Swagger UI:** `/docs`
 - **ReDoc:** `/redoc`
+
+## Link to API's docs:
+- https://blog-post-bvdl.onrender.com/docs 
 
 ## Planned actions
 

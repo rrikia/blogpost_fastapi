@@ -1,0 +1,660 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..eeb92b8
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,54 @@
++name: CI
++
++on:
++  push:
++    branches: [main]
++  pull_request:
++
++jobs:
++  test:
++    runs-on: ubuntu-latest
++
++    # A throwaway Postgres just for this run
++    services:
++      postgres:
++        image: postgres:17
++        env:
++          POSTGRES_USER: postgres
++          POSTGRES_PASSWORD: postgres
++          POSTGRES_DB: fastapi_test
++        ports:
++          - 5432:5432
++        options: >-
++          --health-cmd "pg_isready -U postgres"
++          --health-interval 5s
++          --health-timeout 5s
++          --health-retries 10
++
++    # The app reads these instead of a .env file
++    env:
++      DATABASE_HOSTNAME: localhost
++      DATABASE_PORT: "5432"
++      DATABASE_USERNAME: postgres
++      DATABASE_PASSWORD: postgres
++      DATABASE_NAME: fastapi_test
++      SECRET_KEY: ci-only-not-a-real-secret
++      ALGORITHM: HS256
++      ACCESS_TOKEN_EXPIRE_MINUTES: "30"
++
++    steps:
++      - uses: actions/checkout@v7
++
++      - name: Install uv
++        uses: astral-sh/setup-uv@v10.3.3
++        with:
++          enable-cache: true
++
++      - name: Install dependencies
++        run: uv sync --frozen --group dev
++
++      - name: Check migrations apply to an empty database
++        run: uv run --no-sync alembic upgrade head
++
++      - name: Run tests
++        run: uv run --no-sync pytest -v
+diff --git a/Dockerfile b/Dockerfile
+index d4c39d7..a74f9ce 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,4 +1,3 @@
+-# Install uv 
+ FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim
+ WORKDIR /app
+ 
+@@ -7,7 +6,6 @@ COPY pyproject.toml uv.lock ./
+ RUN uv sync --frozen --no-install-project
+ 
+ # Copy application code
+-
+ COPY app ./app
+ COPY alembic.ini ./
+ COPY alembic/ ./alembic/
+@@ -17,4 +15,6 @@ ENV PATH="/app/.venv/bin:$PATH"
+ 
+ EXPOSE 8000
+ 
+-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+\ No newline at end of file
++# Apply migrations, then start the server.
++# Render sets $PORT; locally it falls back to 8000.
++CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+diff --git a/README.md b/README.md
+index 915649c..7ebf8da 100644
+--- a/README.md
++++ b/README.md
+@@ -89,7 +89,7 @@ uv run pytest -v
+ To run the test suite using the dedicated Docker test service, if configured:
+ 
+ ```bash
+-docker -f compose.test.yaml compose run --build --rm tests
++docker compose -f compose.test.yaml run --build --rm tests
+ ```
+ 
+ ## API Documentation
+diff --git a/alembic/env.py b/alembic/env.py
+index af0adf5..eb4e261 100644
+--- a/alembic/env.py
++++ b/alembic/env.py
+@@ -6,7 +6,6 @@ from sqlalchemy import pool
+ from alembic import context
+ from app.models import Base
+ from app.database import SQLALCHEMY_DATABASE_URL
+-from app.config import settings
+ 
+ 
+ # this is the Alembic Config object, which provides
+@@ -25,7 +24,9 @@ if config.config_file_name is not None:
+ target_metadata = Base.metadata
+ 
+ # override the sqlalchemy.url in alembic.ini
+-config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URL)
++# "%" must be doubled because alembic.ini values support %-interpolation
++# (URL-encoded passwords contain "%")
++config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URL.replace("%", "%%"))
+ 
+ # other values from the config, defined by the needs of env.py
+ # can be acquired:
+diff --git a/alembic/versions/a7c3d9e1b2f4_add_comments_table.py b/alembic/versions/a7c3d9e1b2f4_add_comments_table.py
+new file mode 100644
+index 0000000..fce4c45
+--- /dev/null
++++ b/alembic/versions/a7c3d9e1b2f4_add_comments_table.py
+@@ -0,0 +1,38 @@
++"""add comments table
++
++Revision ID: a7c3d9e1b2f4
++Revises: e01abf601f93
++Create Date: 2026-11-09 23:30:00.000000
++
++"""
++from typing import Sequence, Union
++
++from alembic import op
++import sqlalchemy as sa
++
++# revision identifiers, used by Alembic.
++revision: str = 'a7c3d9e1b2f4'
++down_revision: Union[str, Sequence[str], None] = 'e01abf601f93'
++branch_labels: Union[str, Sequence[str], None] = None
++depends_on: Union[str, Sequence[str], None] = None
++
++
++def upgrade() -> None:
++    op.create_table(
++        'comments',
++        sa.Column('id', sa.Integer(), nullable=False),
++        sa.Column('content', sa.String(), nullable=False),
++        sa.Column('created_at', sa.TIMESTAMP(timezone=True),
++                  server_default=sa.text('now()'), nullable=False),
++        sa.Column('post_id', sa.Integer(), nullable=False),
++        sa.Column('owner_id', sa.Integer(), nullable=False),
++        sa.ForeignKeyConstraint(['post_id'], ['posts.id'], ondelete='CASCADE'),
++        sa.ForeignKeyConstraint(['owner_id'], ['users.id'], ondelete='CASCADE'),
++        sa.PrimaryKeyConstraint('id'),
++    )
++    op.create_index('ix_comments_post_id', 'comments', ['post_id'])
++
++
++def downgrade() -> None:
++    op.drop_index('ix_comments_post_id', table_name='comments')
++    op.drop_table('comments')
+diff --git a/app/config.py b/app/config.py
+index 009bc78..dc672e2 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -1,21 +1,39 @@
+ from pydantic_settings import BaseSettings, SettingsConfigDict
+ 
+-# Pydantic will validate these for us
+-# "loc" is the default variable for DATABASE_PASSWORD
++
+ class Settings(BaseSettings):
+-    DATABASE_HOSTNAME: str
+-    DATABASE_USERNAME: str
+-    DATABASE_PASSWORD: str
+-    DATABASE_PORT: str
+-    DATABASE_NAME: str
+-    ALGORITHM: str
+-    ACCESS_TOKEN_EXPIRE_MINUTES: int
++    # Production (Render + Neon): set DATABASE_URL to the full connection string.
++    # Local development: leave DATABASE_URL unset and use the separate fields.
++    DATABASE_URL: str | None = None
++    DATABASE_HOSTNAME: str = "localhost"
++    DATABASE_PORT: str = "5432"
++    DATABASE_USERNAME: str = "postgres"
++    DATABASE_PASSWORD: str = ""
++    DATABASE_NAME: str = "fastapi"
++
+     SECRET_KEY: str
++    ALGORITHM: str = "HS256"
++    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+ 
+-    model_config = SettingsConfigDict(env_file=".env")
++    # Comma-separated list of frontend origins allowed to call the API,
++    # e.g. "http://localhost:5173,https://my-frontend.pages.dev"
++    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+ 
+-# ignore
+-settings = Settings()
++    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
++
++    @property
++    def database_url(self) -> str:
++        if self.DATABASE_URL:
++            # Some providers hand out "postgres://", which SQLAlchemy no longer accepts
++            return self.DATABASE_URL.replace("postgres://", "postgresql://", 1)
++        return (
++            f"postgresql://{self.DATABASE_USERNAME}:{self.DATABASE_PASSWORD}"
++            f"@{self.DATABASE_HOSTNAME}:{self.DATABASE_PORT}/{self.DATABASE_NAME}"
++        )
+ 
+-# Access variable DATABASE_PASSWORD by 
+-# settings.DATABASE_PASSWORD 
+\ No newline at end of file
++    @property
++    def cors_origins(self) -> list[str]:
++        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
++
++
++settings = Settings()
+diff --git a/app/database.py b/app/database.py
+index 9b2e447..86794f0 100644
+--- a/app/database.py
++++ b/app/database.py
+@@ -1,68 +1,26 @@
+-import time
+-from sqlalchemy import create_engine
+-from sqlalchemy.orm import DeclarativeBase, Session
+-from sqlalchemy.orm import sessionmaker
+-from dotenv import load_dotenv
+-import os
+-from .config import settings
+ from typing import Generator
+ 
+-load_dotenv(".env")
++from sqlalchemy import create_engine
++from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+ 
+-database_password = os.getenv("DATABASE_PASSWORD")
+-print("Password is not none", database_password is not None)
++from .config import settings
+ 
+-SQLALCHEMY_DATABASE_URL = (
+-    f"postgresql://{settings.DATABASE_USERNAME}:"
+-    f"{settings.DATABASE_PASSWORD}@"
+-    f"{settings.DATABASE_HOSTNAME}:"
+-    f"{settings.DATABASE_PORT}/"
+-    f"{settings.DATABASE_NAME}"
+-                            )
++SQLALCHEMY_DATABASE_URL = settings.database_url
+ 
+-# engine responsible for sqlalchemy to connect to postgres
++# pool_pre_ping checks a connection before using it. Neon closes idle
++# connections, so without this the first request after a pause can fail.
++engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+ 
+-engine = create_engine(SQLALCHEMY_DATABASE_URL)
++SessionLocal = sessionmaker(autoflush=False, bind=engine)
+ 
+-# To talk to the database, use a session
+-SessionLocal = sessionmaker(
+-    autoflush=False, 
+-    bind=engine
+-    )
+ 
+ class Base(DeclarativeBase):
+     pass
+ 
+-# Create a dependency
++
+ def get_db() -> Generator[Session, None, None]:
+     db = SessionLocal()
+     try:
+         yield db
+     finally:
+         db.close()
+-
+-
+-database_password = os.getenv("DATABASE_PASSWORD")
+-print("Password is not none", database_password is not None)
+-
+-# Establish a connection with the database 
+-# not necessary anymore, if you want to use postgresql library psycopg2 
+-# instead of sqlalchemy
+-""" while True:
+-
+-    try:
+-        conn = psycopg2.connect(
+-            host=settings.DATABASE_HOSTNAME,
+-            port=settings.DATABASE_PORT, 
+-            dbname=settings.DATABASE_NAME, 
+-            user=settings.DATABASE_USERNAME, 
+-            password = database_password, 
+-            cursor_factory=RealDictCursor)
+-        # Open a cursor to perform database operations
+-        cursor = conn.cursor()
+-        print("Database connection was successful")
+-        break
+-    except Exception as error:
+-        print("Connection to database failed")
+-        print("Error:", error)
+-        time.sleep(2) """
+\ No newline at end of file
+diff --git a/app/main.py b/app/main.py
+index 6c6d58a..87faf8d 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -1,41 +1,30 @@
+ from fastapi import FastAPI
+-# . means current directory
+-from .routers import posts, users, auth, votes
+ from fastapi.middleware.cors import CORSMiddleware
+ 
++from .config import settings
++from .routers import auth, comments, posts, users, votes
+ 
+-# Create models from models.py
+-# models.Base.metadata.create_all(bind=engine)
+-
+-app = FastAPI()
+-
+-origins = [
+-    "https://www.google.com",
+-    "http://localhost.tiangolo.com",
+-    "https://localhost.tiangolo.com",
+-    "http://localhost",
+-    "http://localhost:8080"
+-]
++app = FastAPI(
++    title="Postboard API",
++    description="Posts, votes and comments with JWT authentication.",
++    version="1.0.0",
++)
+ 
+ app.add_middleware(
+     CORSMiddleware,
+-    allow_origins=origins,
++    allow_origins=settings.cors_origins,
+     allow_credentials=True,
+     allow_methods=["*"],
+     allow_headers=["*"],
+ )
+ 
+-# app is the FastAPI object
+-# import router object from posts.py 
+ app.include_router(posts.router)
++app.include_router(comments.router)
+ app.include_router(users.router)
+ app.include_router(auth.router)
+ app.include_router(votes.router)
+ 
+-# request Get method url: "/"
+-@app.get("/")
+-async def root():
+-    return {"message": "Hello World"}
+-
+-
+ 
++@app.get("/", tags=["Health"])
++def root():
++    return {"status": "ok", "docs": "/docs"}
+diff --git a/app/models.py b/app/models.py
+index 4de2631..38efdc7 100644
+--- a/app/models.py
++++ b/app/models.py
+@@ -62,4 +62,18 @@ class Vote(Base):
+     # user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), 
+     #                 primary_key=True)
+     # post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), 
+-    #                 primary_key=True)
+\ No newline at end of file
++    #                 primary_key=True)
++
++class Comment(Base):
++    __tablename__ = "comments"
++
++    id: Mapped[int] = mapped_column(primary_key=True, nullable=False)
++    content: Mapped[str] = mapped_column(String, nullable=False)
++    created_at: Mapped[datetime] = mapped_column(
++        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"))
++    post_id: Mapped[int] = mapped_column(
++        ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True)
++    owner_id: Mapped[int] = mapped_column(
++        ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
++
++    owner: Mapped["User"] = relationship()
+diff --git a/app/routers/comments.py b/app/routers/comments.py
+new file mode 100644
+index 0000000..4795aab
+--- /dev/null
++++ b/app/routers/comments.py
+@@ -0,0 +1,82 @@
++from typing import List
++
++from fastapi import APIRouter, Depends, HTTPException, Response, status
++from sqlalchemy import select
++from sqlalchemy.orm import Session
++
++from .. import models, oauth2, schemas
++from ..database import get_db
++
++router = APIRouter(tags=["Comments"])
++
++
++def get_post_or_404(db: Session, post_id: int) -> models.Post:
++    post = db.get(models.Post, post_id)
++    if not post:
++        raise HTTPException(
++            status_code=status.HTTP_404_NOT_FOUND,
++            detail=f"post with id: {post_id} was not found",
++        )
++    return post
++
++
++@router.get("/posts/{post_id}/comments", response_model=List[schemas.CommentOut])
++def get_comments(
++    post_id: int,
++    limit: int = 20,
++    skip: int = 0,
++    db: Session = Depends(get_db),
++    current_user: models.User = Depends(oauth2.get_current_user),
++):
++    get_post_or_404(db, post_id)
++    comments = db.scalars(
++        select(models.Comment)
++        .where(models.Comment.post_id == post_id)
++        .order_by(models.Comment.created_at, models.Comment.id)
++        .limit(limit)
++        .offset(skip)
++    ).all()
++    return comments
++
++
++@router.post(
++    "/posts/{post_id}/comments",
++    status_code=status.HTTP_201_CREATED,
++    response_model=schemas.CommentOut,
++)
++def create_comment(
++    post_id: int,
++    comment: schemas.CommentCreate,
++    db: Session = Depends(get_db),
++    current_user: models.User = Depends(oauth2.get_current_user),
++):
++    get_post_or_404(db, post_id)
++    new_comment = models.Comment(
++        post_id=post_id, owner_id=current_user.id, **comment.model_dump()
++    )
++    db.add(new_comment)
++    db.commit()
++    db.refresh(new_comment)
++    return new_comment
++
++
++@router.delete("/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
++def delete_comment(
++    comment_id: int,
++    db: Session = Depends(get_db),
++    current_user: models.User = Depends(oauth2.get_current_user),
++):
++    comment = db.get(models.Comment, comment_id)
++    if not comment:
++        raise HTTPException(
++            status_code=status.HTTP_404_NOT_FOUND,
++            detail=f"comment with id: {comment_id} does not exist",
++        )
++    if comment.owner_id != current_user.id:
++        raise HTTPException(
++            status_code=status.HTTP_403_FORBIDDEN,
++            detail="Not authorized to perform requested action",
++        )
++    db.delete(comment)
++    db.commit()
++    return Response(status_code=status.HTTP_204_NO_CONTENT)
+diff --git a/app/schemas.py b/app/schemas.py
+index 61281db..ad2868e 100644
+--- a/app/schemas.py
++++ b/app/schemas.py
+@@ -68,3 +68,17 @@ class Vote(BaseModel):
+     # validate that its value is only 0 or 1 
+     # le=1 means <= 1
+     dir: Annotated[int, Field(le=1, ge=0)]
++
++
++class CommentCreate(BaseModel):
++    content: Annotated[str, Field(min_length=1, max_length=2000)]
++
++
++class CommentOut(BaseModel):
++    id: int
++    content: str
++    created_at: datetime
++    post_id: int
++    owner_id: int
++    owner: UserOut
++    model_config = ConfigDict(from_attributes=True)
+diff --git a/tests/conftest.py b/tests/conftest.py
+index 5a1ded7..c0f3e78 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,36 +1,22 @@
+ from fastapi.testclient import TestClient
+ import pytest
+ from sqlalchemy import create_engine
+-from sqlalchemy.orm import DeclarativeBase
+-from sqlalchemy.orm import sessionmaker, Session
+-from dotenv import load_dotenv
+-import os
+ from typing import Generator
++from sqlalchemy.orm import sessionmaker, Session
++from sqlalchemy.engine import make_url
+ from app.config import settings
+ from app.database import get_db, Base
+ from app.main import app
+-from typing import Generator
+ from app.oauth2 import create_access_token
+ from app import models
+ 
+-load_dotenv(".env")
+-
+-database_password = os.getenv("DATABASE_PASSWORD")
+-print("Password is not none", database_password is not None)
+-
+-SQLALCHEMY_DATABASE_URL = (
+-    f"postgresql://{settings.DATABASE_USERNAME}:"
+-    f"{settings.DATABASE_PASSWORD}@"
+-    f"{settings.DATABASE_HOSTNAME}:"
+-    f"{settings.DATABASE_PORT}/"
+-    f"{settings.DATABASE_NAME}"
+-                            )
+-
++SQLALCHEMY_DATABASE_URL = settings.database_url
+ 
+ # Safety check: drop_all() deletes everything, so refuse to run on a non-test database
+-if not settings.DATABASE_NAME.endswith("_test"):
++test_db_name = make_url(SQLALCHEMY_DATABASE_URL).database or ""
++if not test_db_name.endswith("_test"):
+     raise RuntimeError(
+-        f"Refusing to run tests on '{settings.DATABASE_NAME}'. "
++        f"Refusing to run tests on '{test_db_name}'. "
+         "The test database name must end with '_test'."
+     )
+ 
+@@ -102,8 +88,6 @@ def test_user2 (client):
+     new_user["password"] = user_data["password"]
+     return new_user
+ 
+-database_password = os.getenv("DATABASE_PASSWORD")
+-print("Password is not none", database_password is not None)
+ 
+ 
+ # Fixture to create a token for the test user
+diff --git a/tests/test_comments.py b/tests/test_comments.py
+new file mode 100644
+index 0000000..498ed16
+--- /dev/null
++++ b/tests/test_comments.py
+@@ -0,0 +1,84 @@
++import pytest
++from app import models, schemas
++
++
++@pytest.fixture
++def test_comments(test_posts, test_user, test_user2, session):
++    comments = [
++        models.Comment(content="first comment", post_id=test_posts[0].id, owner_id=test_user["id"]),
++        models.Comment(content="second comment", post_id=test_posts[0].id, owner_id=test_user2["id"]),
++        models.Comment(content="other post", post_id=test_posts[1].id, owner_id=test_user["id"]),
++    ]
++    session.add_all(comments)
++    session.commit()
++    return session.query(models.Comment).order_by(models.Comment.id).all()
++
++
++def test_get_comments_for_post(authorized_client, test_posts, test_comments):
++    res = authorized_client.get(f"/posts/{test_posts[0].id}/comments")
++    assert res.status_code == 200
++    comments = [schemas.CommentOut(**c) for c in res.json()]
++    assert len(comments) == 2
++    assert [c.content for c in comments] == ["first comment", "second comment"]
++
++
++def test_unauthorized_get_comments(client, test_posts, test_comments):
++    res = client.get(f"/posts/{test_posts[0].id}/comments")
++    assert res.status_code == 401
++
++
++def test_get_comments_post_not_found(authorized_client, test_posts):
++    res = authorized_client.get("/posts/88888/comments")
++    assert res.status_code == 404
++
++
++def test_create_comment(authorized_client, test_user, test_posts):
++    post_id = test_posts[3].id
++    res = authorized_client.post(f"/posts/{post_id}/comments", json={"content": "nice post"})
++    assert res.status_code == 201
++    comment = schemas.CommentOut(**res.json())
++    assert comment.content == "nice post"
++    assert comment.post_id == post_id
++    assert comment.owner_id == test_user["id"]
++    assert comment.owner.email == test_user["email"]
++
++
++def test_create_comment_empty_content(authorized_client, test_posts):
++    res = authorized_client.post(
++        f"/posts/{test_posts[0].id}/comments", json={"content": ""})
++    assert res.status_code == 422
++
++
++def test_create_comment_post_not_found(authorized_client, test_posts):
++    res = authorized_client.post("/posts/88888/comments", json={"content": "hi"})
++    assert res.status_code == 404
++
++
++def test_unauthorized_create_comment(client, test_posts):
++    res = client.post(f"/posts/{test_posts[0].id}/comments", json={"content": "hi"})
++    assert res.status_code == 401
++
++
++def test_delete_own_comment(authorized_client, test_comments):
++    res = authorized_client.delete(f"/comments/{test_comments[0].id}")
++    assert res.status_code == 204
++
++
++def test_delete_other_users_comment(authorized_client, test_comments):
++    # test_comments[1] belongs to test_user2
++    res = authorized_client.delete(f"/comments/{test_comments[1].id}")
++    assert res.status_code == 403
++
++
++def test_delete_comment_not_found(authorized_client, test_comments):
++    res = authorized_client.delete("/comments/88888")
++    assert res.status_code == 404
++
++
++def test_comments_deleted_with_post(authorized_client, test_posts, test_comments, session):
++    post_id = test_posts[0].id
++    res = authorized_client.delete(f"/posts/{post_id}")
++    assert res.status_code == 204
++    remaining = session.query(models.Comment).filter(
++        models.Comment.post_id == post_id).count()
++    assert remaining == 0
+diff --git a/tests/test_users.py b/tests/test_users.py
+index 0630826..43d74e4 100644
+--- a/tests/test_users.py
++++ b/tests/test_users.py
+@@ -11,7 +11,7 @@ def test_root(client):
+     # To see the actual payload returned by the endpoint, 
+     # use response.json() to get the JSON response
+ 
+-    assert response.json() == {"message": "Hello World"}
++    assert response.json() == {"status": "ok", "docs": "/docs"}
+ 
+ 
+ # Each test should be independent of each other

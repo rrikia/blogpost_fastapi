@@ -89,7 +89,7 @@ uv run pytest -v
 To run the test suite using the dedicated Docker test service, if configured:
 
 ```bash
-docker -f compose.test.yaml compose run --build --rm tests
+docker compose -f compose.test.yaml run --build --rm tests
 ```
 
 ## API Documentation

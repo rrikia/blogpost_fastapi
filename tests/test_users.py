@@ -67,3 +67,8 @@ def test_incorrect_login(test_user, client, email, password, status_code):
 
     assert res.status_code == status_code
     # assert res.json().get('detail') == 'Invalid Credentials'
+
+
+def test_create_user_duplicate_email(client, test_user):
+    res = client.post("/users/", json={"email": test_user["email"], "password": "anything"})
+    assert res.status_code == 409

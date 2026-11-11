@@ -1,0 +1,75 @@
+
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", sans-serif;
+
+  /* Main color palette */
+  --color-dark: #363062;
+  --color-blue: #435585;
+  --color-light: #818FB4;
+  --color-cream: #F5E8C7;
+
+  /* Semantic colors */
+  --color-success: #6FCF97;
+  --color-danger: #FCA5A5;
+}
+
+body {
+  @apply bg-dark text-cream antialiased;
+  font-family: var(--font-sans);
+}
+
+/* Reusable component styles */
+@layer components {
+
+  /* Primary button: cream background with dark text */
+  .btn-primary {
+    @apply rounded-md bg-cream px-4 py-2 text-sm font-semibold
+           text-dark transition-colors
+           hover:bg-light
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  /* Secondary button: blue background */
+  .btn-secondary {
+    @apply rounded-md border border-light/40 bg-blue
+           px-4 py-2 text-sm font-medium text-cream
+           transition-colors
+           hover:bg-light hover:text-dark
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  /* Text inputs */
+  .input {
+    @apply w-full rounded-md border border-light/40
+           bg-blue px-3 py-2 text-sm text-cream
+           placeholder:text-light
+           outline-none transition-colors
+           focus:border-cream focus:ring-2 focus:ring-cream/20;
+  }
+
+  /* Cards and content containers */
+  .card {
+    @apply rounded-lg border border-light/30
+           bg-blue p-4 text-cream shadow-lg shadow-black/10;
+  }
+
+  /* Error messages */
+  .error {
+    @apply rounded-md border border-red-400/30
+           bg-red-950/40 px-3 py-2 text-sm text-red-200;
+  }
+}
+
+/*
+Navbar: bg-dark
+Main content: bg-dark
+Cards: bg-blue
+Primary buttons: bg-cream text-dark
+Secondary buttons: bg-blue text-cream
+Headings: text-cream
+Descriptions: text-light
+Input fields: bg-blue text-cream
+Borders: border-light/30
+*/

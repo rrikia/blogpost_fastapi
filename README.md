@@ -1,45 +1,49 @@
-**This project is for learning and practicing API development with FastAPI**
+# BlogPost
 
-A RESTful API built with **FastAPI** and **PostgreSQL**, featuring JWT authentication, CRUD operations, post voting, automated testing, and Docker-based development.
+![CI](https://github.com/rrikia/practice_fastapi/actions/workflows/ci.yml/badge.svg)
 
-## Tech Stack
+A full-stack blogging app where users can sign up, write posts, vote and comment. The backend is a FastAPI REST API on PostgreSQL, and the frontend is a React + TypeScript single-page app.
 
-- **Framework:** FastAPI, Uvicorn
-- **Validation & Configuration:** Pydantic, pydantic-settings
-- **Database:** PostgreSQL, SQLAlchemy, Alembic, psycopg2-binary
-- **Authentication:** JWT, python-jose, Passlib, bcrypt
-- **Testing:** pytest, FastAPI TestClient, HTTPX
-- **Containerization:** Docker, Docker Compose
-- **Deployment:** Render *(planned)*
-- **CI/CD:** GitHub Actions *(planned)*
+**Live demo:** https://blogpost-7pyb.onrender.com · **API docs:** https://blog-post-bvdl.onrender.com/docs
+
+> Hosted on free plans: the API sleeps when idle, so the first request can take up to a minute.
+
+| Feed | Post with comments |
+|---|---|
+| ![Feed](docs/feed.png) | ![Post](docs/CreatePost.png) |
 
 ## Features
 
-- **CRUD operations** for users and posts
-- **JWT authentication** with password hashing
-- **Voting system** that prevents duplicate votes per user and post
-- **SQL joins and aggregations** for dynamic vote counts
-- **Database migrations** managed with Alembic
-- **Automated tests** using pytest
-- **Interactive API documentation** at `/docs`
+- **JWT authentication** with bcrypt password hashing
+- **Posts:** create, edit and delete, with title search and pagination
+- **Votes:** one vote per user per post; counts aggregated with SQL joins
+- **Comments:** add and delete comments on any post; only the author can delete theirs
+- **Ownership checks:** users can only edit or delete their own content
+- **44 automated tests** with pytest against a real PostgreSQL database
 
-## Getting Started
+## Tech stack
 
-### Prerequisites
+| Area | Tools |
+|---|---|
+| Backend | FastAPI, Pydantic, SQLAlchemy 2.0, Alembic, python-jose, Passlib |
+| Database | PostgreSQL (Neon in production) |
+| Frontend | React, TypeScript, Vite, React Router, Tailwind CSS |
+| Testing | pytest, FastAPI TestClient |
+| DevOps | Docker, Docker Compose, GitHub Actions, Render |
 
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/)
-- Docker Desktop and Docker Compose
-- PostgreSQL, if running the application outside Docker
+## Architecture
 
-### 1. Clone the repository
-
-```bash
-git clone <your-repo-url>
-cd <your-repo-folder>
+```
+React app (Render static site) ──HTTPS + JWT──▶ FastAPI (Render, Docker) ──▶ PostgreSQL (Neon)
 ```
 
-### 2. Configure environment variables
+Every push and pull request runs the test suite in GitHub Actions against a temporary PostgreSQL database. Render deploys `main` only after CI passes, and Alembic migrations run automatically when the API container starts.
+
+## Running locally
+
+**Prerequisites:** Python 3.13+, [uv](https://docs.astral.sh/uv/), Node.js 22+, and PostgreSQL (or Docker).
+
+### Backend
 
 Create a `.env` file in the project root:
 
@@ -50,64 +54,51 @@ DATABASE_USERNAME=postgres
 DATABASE_PASSWORD=your_password
 DATABASE_NAME=fastapi
 SECRET_KEY=your_secure_secret
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
 ```
-
-Use `DATABASE_HOSTNAME=db` when connecting from the application container through Docker Compose. 
-
-### 3. Install dependencies
 
 ```bash
 uv sync
-```
-
-### 4. Run database migrations
-
-```bash
 uv run alembic upgrade head
+uv run uvicorn app.main:app --reload    # http://localhost:8000/docs
 ```
 
-### 5. Start the application
+Or run the API and PostgreSQL together with `docker compose up --build` (set `DATABASE_HOSTNAME=db`).
+
+### Frontend
 
 ```bash
-uv run uvicorn app.main:app --reload
+cd frontend
+npm install
+cp .env.example .env.local    # VITE_API_URL=http://localhost:8000
+npm run dev                   # http://localhost:5173
 ```
 
-Alternatively, run the application and PostgreSQL with Docker Compose:
-
-```bash
-docker compose up --build
-```
-
-### 6. Run tests
+### Tests
 
 ```bash
 uv run pytest -v
-```
-
-To run the test suite using the dedicated Docker test service, if configured:
-
-```bash
+# or in Docker:
 docker compose -f compose.test.yaml run --build --rm tests
 ```
-### Badge
-   ![CI](https://github.com/rrikia/practice_fastapi/actions/workflows/ci.yml/badge.svg)
 
-## API Documentation
+Tests need a database whose name ends in `_test`; they refuse to run against any other database.
 
-Once the application is running, visit:
+## Configuration
 
-- **Swagger UI:** `/docs`
-- **ReDoc:** `/redoc`
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Full connection string (production). If unset, the `DATABASE_*` fields are used |
+| `SECRET_KEY` | Signs JWTs |
+| `ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT settings (defaults: `HS256`, `30`) |
+| `CORS_ORIGINS` | Comma-separated frontend URLs allowed to call the API |
+| `VITE_API_URL` | API address used by the frontend at build time |
 
-## Link to API's docs:
-- https://blog-post-bvdl.onrender.com/docs 
+## Beyond the tutorial
 
-## Planned actions
+The core API (users, posts, votes, JWT auth) started from [this FastAPI course](https://youtu.be/0sOvCWFmrtA). I then added:
 
-- Deploy the application to Render
-- Set up CI/CD with GitHub Actions
-
-## Reference:
-- Tutorial: https://youtu.be/0sOvCWFmrtA?si=Z2_hdypJ5Y5bu2-w
+- Comments: model, Alembic migration, endpoints and tests
+- A React + TypeScript frontend with a custom theme and an About page
+- Production configuration: a single `DATABASE_URL`, CORS from environment variables, and migrations on startup
+- A CI/CD pipeline with GitHub Actions, and deployment on Render with Neon PostgreSQL
+- A fix so signing up with an existing email returns a clear 409 error instead of crashing

@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Response, status, HTTPException, Depends, APIRouter
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from .. import models, schemas, utils
 from ..database import get_db
@@ -15,6 +16,12 @@ router = APIRouter(
 # Create a user, like the route create post
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=schemas.UserOut)
 def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    # Emails are unique: answer 409 instead of crashing on the database constraint
+    existing = db.scalars(select(models.User).where(models.User.email == user.email)).first()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="An account with this email already exists")
+
     # Before creating a user, hash the password - user.password
     hashed_password = utils.hash(user.password)
     user.password = hashed_password

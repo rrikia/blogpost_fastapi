@@ -1,8 +1,8 @@
 # BlogPost
 
-![CI](https://github.com/rrikia/practice_fastapi/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/rrikia/blogpost_fastapi/actions/workflows/ci.yml/badge.svg)
 
-A full-stack blogging app where users can sign up, write posts, vote and comment. The backend is a FastAPI REST API on PostgreSQL, and the frontend is a React + TypeScript single-page app.
+A blogging app where users can sign up, write posts, vote and comment. The backend is a FastAPI REST API on PostgreSQL, and the frontend is a React + TypeScript single-page app.
 
 **Live demo:** https://blogpost-7pyb.onrender.com · **API docs:** https://blog-post-bvdl.onrender.com/docs
 
